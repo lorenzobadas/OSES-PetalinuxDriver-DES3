@@ -58,6 +58,8 @@
 #define SUCCESS 0
 #define DATA_SIZE 8
 
+#define DEBUG
+
 /* Standard module information, edit as appropriate */
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR
@@ -71,7 +73,9 @@ static struct class *cls;
 /* This is called whenever a process attempts to open the device file */ 
 static int device_open(struct inode *inode, struct file *file) 
 { 
+	#ifdef DEBUG
     pr_info("device_open(%p)\n", file); 
+	#endif
  
     try_module_get(THIS_MODULE); 
     return SUCCESS; 
@@ -79,7 +83,9 @@ static int device_open(struct inode *inode, struct file *file)
 
 static int device_release(struct inode *inode, struct file *file) 
 { 
+	#ifdef DEBUG
     pr_info("device_release(%p,%p)\n", inode, file); 
+	#endif
  
     module_put(THIS_MODULE); 
     return SUCCESS;
@@ -95,7 +101,9 @@ static ssize_t device_read(struct file *file, /* see include/linux/fs.h   */
 { 	
 	int i;
 	unsigned int result[13];
+	#ifdef DEBUG
 	pr_info("Starting read from AXI Registers\n");
+	#endif
 	result[ 0] = ioread32(axi_slv_regs + DES3_AXI_DES_IN_HI_OFFSET);
 	result[ 1] = ioread32(axi_slv_regs + DES3_AXI_DES_IN_LO_OFFSET);
 	result[ 2] = ioread32(axi_slv_regs + DES3_AXI_KEY1_HI_OFFSET);
@@ -109,7 +117,7 @@ static ssize_t device_read(struct file *file, /* see include/linux/fs.h   */
 	result[10] = ioread32(axi_slv_regs + DES3_AXI_DES_OUT_LO_OFFSET);
 	result[11] = ioread32(axi_slv_regs + DES3_AXI_READY_OFFSET);
 	result[12] = ioread32(axi_slv_regs + DES3_AXI_VALID_KEY_OFFSET);
-
+	#ifdef DEBUG
 	pr_info("Read from AXI Registers completed\n");
 	pr_info("des_in  : 0x%08X%08X\n", result[0], result[1]);
 	pr_info("decrypt : 0x%08X\n", 	  result[8]);
@@ -119,6 +127,7 @@ static ssize_t device_read(struct file *file, /* see include/linux/fs.h   */
 	pr_info("des_out : 0x%08X%08X\n", result[9], result[10]);
 	pr_info("ready   : 0x%08X\n", 	  result[11]);
 	pr_info("validkey: 0x%08X\n\n",   result[12]);
+	#endif
 
 
 	// checks
@@ -130,7 +139,9 @@ static ssize_t device_read(struct file *file, /* see include/linux/fs.h   */
 
 	copy_to_user(buffer, result, sizeof(result));
 
+	#ifdef DEBUG
 	pr_info("Read 52 bytes\n"); 
+	#endif
 	return 52;
 }
 
@@ -142,19 +153,25 @@ static ssize_t device_write(struct file *file, const char __user *buffer,
 
 	// checks
 	if (length != 36) {
+		#ifdef DEBUG
 		pr_info("lenght is %d\n", length);
+		#endif
 		pr_alert("Tried to write length != 36\nNothing done\n");
 		return 0;
 	}
 	if (*offset != 0) {
+		#ifdef DEBUG
 		pr_info("Offset != 0\nOffset was ignored\n");
+		#endif
 	}
 
 	// write operation
     for (int i = 0; i < length; i++) {
 		get_user(kernel_buffer[i], buffer + i); 
 	}
+	#ifdef DEBUG
 	pr_info("Starting write to AXI Registers\n");
+	#endif
 	iowrite32(*((unsigned int*)(kernel_buffer   )), axi_slv_regs + DES3_AXI_KEY1_HI_OFFSET);
 	iowrite32(*((unsigned int*)(kernel_buffer+ 4)), axi_slv_regs + DES3_AXI_KEY1_LO_OFFSET);
 	iowrite32(*((unsigned int*)(kernel_buffer+ 8)), axi_slv_regs + DES3_AXI_KEY2_HI_OFFSET);
@@ -164,7 +181,9 @@ static ssize_t device_write(struct file *file, const char __user *buffer,
 	iowrite32(*((unsigned int*)(kernel_buffer+24)), axi_slv_regs + DES3_AXI_DES_IN_HI_OFFSET);
 	iowrite32(*((unsigned int*)(kernel_buffer+28)), axi_slv_regs + DES3_AXI_DES_IN_LO_OFFSET);
 	iowrite32(*((unsigned int*)(kernel_buffer+32)), axi_slv_regs + DES3_AXI_DECRYPT_OFFSET);
+	#ifdef DEBUG
 	pr_info("Write to AXI Registers completed\n");
+	#endif
     /* Return the number of input characters used. */ 
     return 36; 
 } 
@@ -188,7 +207,7 @@ static int __init des3module_init(void)
     if (major < 0) { 
         pr_alert("Registering char device failed with %d\n", major); 
         return major; 
-    } 
+    }
     pr_info("Char device was assigned major number %d.\n", major); 
  
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0) 
@@ -209,7 +228,9 @@ static int __init des3module_init(void)
 		printk(KERN_INFO "failed to map axi base address\n");
 		return -ENOMEM;
 	}
+	#ifdef DEBUG
 	pr_info("Successfully remapped axi_slv_regs from 0x%x to 0x%p", XPAR_DES3_AXI_0_S00_AXI_BASEADDR, axi_slv_regs);
+	#endif
 
     return SUCCESS; 
 } 
@@ -221,8 +242,9 @@ static void __exit des3module_exit(void)
     class_destroy(cls); 
     /* Unregister the device */ 
     unregister_chrdev(MAJOR_NUM, DRIVER_FILE_NAME);
-
+	#ifdef DEBUG
 	printk(KERN_ALERT "Goodbye module world.\n");
+	#endif
 }
 
 module_init(des3module_init);
