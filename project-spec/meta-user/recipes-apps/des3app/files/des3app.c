@@ -1,133 +1,306 @@
-/*
-* Copyright (C) 2013-2022  Xilinx, Inc.  All rights reserved.
-* Copyright (c) 2022-2023 Advanced Micro Devices, Inc. All Rights Reserved.
-*
-* Permission is hereby granted, free of charge, to any person
-* obtaining a copy of this software and associated documentation
-* files (the "Software"), to deal in the Software without restriction,
-* including without limitation the rights to use, copy, modify, merge,
-* publish, distribute, sublicense, and/or sell copies of the Software,
-* and to permit persons to whom the Software is furnished to do so,
-* subject to the following conditions:
-*
-* The above copyright notice and this permission notice shall be included
-* in all copies or substantial portions of the Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-* IN NO EVENT SHALL XILINX  BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-* WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-* CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*
-* Except as contained in this notice, the name of the Xilinx shall not be used
-* in advertising or otherwise to promote the sale, use or other dealings in this
-* Software without prior written authorization from Xilinx.
-*
-*/
-
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
-void split_key(const char *hex_key, int *var1, int *var2, int *var3, int *var4, int *var5, int *var6);
-void split_input(const char *hex_input, int *var1, int *var2);
+#ifdef DEBUG
+    #define DES3MODULE_WRITE "./des3module_write"
+    #define DES3MODULE_READ "./des3module_read"
+#else
+    #define DES3MODULE_WRITE "/dev/des3module"
+    #define DES3MODULE_READ "/dev/des3module"
+#endif
 
-int main(int argc, char **argv)
-{
-    FILE *fptr;
-    char *endptr;
+#define DES3_ENCRYPT 0
+#define DES3_DECRYPT 1
 
-    
-    //                          key1HI      key1LO      key2HI      key2LO      key3HI      key3LO      desinHI     desinLO      decrypt
-    uint32_t buffer[13];// = {0x6d6e7364, 0x6e7a6e62, 0x61646173, 0x31323234, 0x34373738, 0x38313838, 0x6369616F, 0x6369616F, 0x00000000};
+struct key {
+    uint32_t high1;
+    uint32_t low1;
+    uint32_t high2;
+    uint32_t low2;
+    uint32_t high3;
+    uint32_t low3;
+};
 
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s <key> <input> <decrypt>\n", argv[0]);
-        return 1; // Exit with an error code
-    }
-    
-    split_key(argv[1], &buffer[0], &buffer[1], &buffer[2], &buffer[3], &buffer[4], &buffer[5]);
-    split_input(argv[2], &buffer[6], &buffer[7]);
-    buffer[8] = strtol(argv[3], &endptr, 16);
-    // Check for conversion errors
-    if (*endptr != '\0') {
-        fprintf(stderr, "Error: Invalid hexadecimal input\n");
-        return 1; // Exit with an error code
-    }
+void write_to_driver(char *buffer, struct key key, uint8_t decrypt) {
+    // driver_buffer = [key1HI, key1LO, key2HI, key2LO, key3HI, key3LO, desinHI, desinLO, decrypt]
+    uint32_t driver_buffer[9] = {0};
+    uint32_t *buffer_ptr = (uint32_t*)buffer;
 
-    // scrivi i dati in ingresso
-    fptr = fopen("/dev/des3module", "w");
-    fwrite(buffer, sizeof(uint32_t), 9, fptr);
+    driver_buffer[0] = key.high1;
+    driver_buffer[1] = key.low1;
+    driver_buffer[2] = key.high2;
+    driver_buffer[3] = key.low2;
+    driver_buffer[4] = key.high3;
+    driver_buffer[5] = key.low3;
+    driver_buffer[6] = *(buffer_ptr++);
+    driver_buffer[7] = *(buffer_ptr++);
+    driver_buffer[8] = decrypt;
+    // write driver_buffer to driver
+    FILE *fptr = fopen(DES3MODULE_WRITE, "w");
+    fwrite(driver_buffer, sizeof(uint32_t), 9, fptr);
+    fclose(fptr);
+}
+
+int read_from_driver(char *buffer) {
+    uint32_t driver_buffer[13] = {0};
+    char *driver_buffer_ptr = (char*)(&driver_buffer[9]);
+    // read driver_buffer from driver
+    FILE *fptr = fopen(DES3MODULE_READ, "r");
+    fread(driver_buffer, sizeof(uint32_t), 13, fptr);
     fclose(fptr);
 
-    // leggi i risultati
-    fptr = fopen("/dev/des3module", "r");
-    fread(buffer, sizeof(uint32_t), sizeof(buffer)/sizeof(buffer[0]), fptr);
-    fclose(fptr);
+    buffer[0] = *(driver_buffer_ptr++);
+    buffer[1] = *(driver_buffer_ptr++);
+    buffer[2] = *(driver_buffer_ptr++);
+    buffer[3] = *(driver_buffer_ptr++);
+    buffer[4] = *(driver_buffer_ptr++);
+    buffer[5] = *(driver_buffer_ptr++);
+    buffer[6] = *(driver_buffer_ptr++);
+    buffer[7] = *(driver_buffer_ptr++);
 
-    /*
-    printf("des_in  : 0x%08X%08X\n", buffer[0], buffer[1]);
-    printf("decrypt : 0x%08X\n",     buffer[8]);
-    printf("key1    : 0x%08X%08X\n", buffer[2], buffer[3]);
-    printf("key2    : 0x%08X%08X\n", buffer[4], buffer[5]);
-    printf("key3    : 0x%08X%08X\n", buffer[6], buffer[7]);
-    printf("des_out : 0x%08X%08X\n", buffer[9], buffer[10]);
-    printf("ready   : 0x%08X\n",     buffer[11]);
-    printf("validkey: 0x%08X\n\n",   buffer[12]);
-    */
+    int valid = driver_buffer[12];
+    return valid;
+}
 
-    if (!buffer[12]) { // if key not valid
-        fprintf(stderr, "Specified key does not conform to TripleDES standard\n");
+int validkey(struct key key) {
+    int valid = 0;
+    char tmp[8] = {0};
+    // write key to driver
+    write_to_driver(tmp, key, DES3_ENCRYPT);
+
+    // read result from driver
+    valid = read_from_driver(tmp);
+    return valid;
+}
+
+int get_file_length(FILE *file) {
+    int length;
+    fseek(file, 0, SEEK_END);
+    length = ftell(file);
+    // move the file pointer back to the start of the file
+    fseek(file, 0, SEEK_SET);
+    return length;
+}
+
+struct key get_key(FILE *keyfile) {
+    struct key key;
+    char buffer[9] = {0};
+    int length;
+
+    // get length of keyfile
+    length = get_file_length(keyfile);
+
+    // check that the keyfile is 48 characters long
+    if (length != 48) {
+        // print error to stderr and exit
+        fprintf(stderr, "Error: keyfile must be 48 characters long, got %d\n", length);
+        exit(1);
+    }
+
+
+    // read the keyfile into the key struct
+    fread(buffer, 1, 8, keyfile);
+    key.high1 = strtol(buffer, NULL, 16);
+    fread(buffer, 1, 8, keyfile);
+    key.low1 = strtol(buffer, NULL, 16);
+    fread(buffer, 1, 8, keyfile);
+    key.high2 = strtol(buffer, NULL, 16);
+    fread(buffer, 1, 8, keyfile);
+    key.low2 = strtol(buffer, NULL, 16);
+    fread(buffer, 1, 8, keyfile);
+    key.high3 = strtol(buffer, NULL, 16);
+    fread(buffer, 1, 8, keyfile);
+    key.low3 = strtol(buffer, NULL, 16);
+    
+    return key;
+}
+
+void decryptdes3(FILE *datainfile, struct key key, char *dataoutfilename) {
+    int length;
+    char buffer[9] = {0};
+    uint32_t driver_buffer[13] = {0};
+    int i;
+    FILE *dataoutfile;
+
+    length = get_file_length(datainfile);
+    // check that the length of the file is a multiple of 8
+    if (length % 8 != 0) {
+        // print error to stderr and exit
+        fprintf(stderr, "Error: datainfile length is not a multiple of 8\n");
+        fclose(datainfile);
+        exit(1);
+    }
+
+    // open dataoutfile for writing
+    if ((dataoutfile = fopen(dataoutfilename, "w")) == NULL) {
+        // print error to stderr and exit
+        fprintf(stderr, "Error: cannot open dataoutfile\n");
+        fclose(datainfile);
+        exit(1);
+    }
+    
+
+    for (i = 0; i < length-8; i+=8) {
+        // read 8 bytes from datainfile and store in buffer
+        fread(buffer, 1, 8, datainfile);
+        // call driver to decrypt buffer
+        write_to_driver(buffer, key, DES3_DECRYPT);
+        read_from_driver(buffer);
+        // write buffer to dataoutfile
+        fwrite(buffer, 1, 8, dataoutfile);
+
+    }
+    fread(buffer, 1, 8, datainfile);
+    // call driver to decrypt buffer
+    write_to_driver(buffer, key, DES3_DECRYPT);
+    read_from_driver(buffer);
+
+    // check for padding in last block
+    // read last byte of buffer
+    // check that the last byte is less or equal to 8, call this value ref
+    // if it is, check that the last ref bytes of buffer are equal to ref
+    // if they are, write buffer to dataoutfile without the last ref bytes
+    // if they are not, write buffer to dataoutfile
+    uint8_t ref = buffer[7];
+    uint8_t found_different = 0;
+    if (ref <= 8 && ref > 0) {
+        for (i = 1; i < ref; i++) {
+            if (buffer[7-i] != ref) {
+                found_different = 1;
+            }
+        }
+        if (!found_different) {
+            fwrite(buffer, 1, 8-ref, dataoutfile);
+            fclose(dataoutfile);
+            return;
+        }        
+    }
+    // error format in last block
+    // print error to stderr and exit
+    fprintf(stderr, "Error: format in last block is incorrect\n");
+    fclose(dataoutfile);
+    fclose(datainfile);
+    exit(1);
+}
+
+void encryptdes3(FILE *datainfile, struct key key, char *dataoutfilename) {
+    int length;
+    int mod_length;
+    int padding;
+    char buffer[9] = {0};
+    uint32_t driver_buffer[13] = {0};
+    int i;
+    FILE *dataoutfile;
+
+    length = get_file_length(datainfile);
+    mod_length = length % 8;
+    padding = 8 - mod_length;
+
+
+    // open dataoutfile for writing
+    if ((dataoutfile = fopen(dataoutfilename, "w")) == NULL) {
+        // print error to stderr and exit
+        fprintf(stderr, "Error: cannot open dataoutfile\n");
+        fclose(datainfile);
+        exit(1);
+    }
+
+    for (i = 0; i < length-mod_length; i+=8) {
+        // read 8 bytes from datainfile and store in buffer
+        fread(buffer, 1, 8, datainfile);
+        // call driver to encrypt buffer
+        write_to_driver(buffer, key, DES3_ENCRYPT);
+        read_from_driver(buffer);
+        // write buffer to dataoutfile
+        fwrite(buffer, 1, 8, dataoutfile);
+    }
+    if (padding != 8) {
+        fread(buffer, 1, mod_length, datainfile);
+        for (i = 0; i < padding; i++) {
+            buffer[mod_length+i] = padding;
+        }
+        // call driver to encrypt buffer
+        write_to_driver(buffer, key, DES3_ENCRYPT);
+        read_from_driver(buffer);
+        // write buffer to dataoutfile
+        fwrite(buffer, 1, 8, dataoutfile);
+    }
+    else {
+        fread(buffer, 1, 8, datainfile);
+        // call driver to encrypt buffer
+        write_to_driver(buffer, key, DES3_ENCRYPT);
+        read_from_driver(buffer);
+        // write buffer to dataoutfile
+        fwrite(buffer, 1, 8, dataoutfile);
+
+        for(i = 0; i < padding; i++) {
+            buffer[i] = padding;
+        }
+        // call driver to encrypt buffer
+        write_to_driver(buffer, key, DES3_ENCRYPT);
+        read_from_driver(buffer);
+        // write buffer to dataoutfile
+        fwrite(buffer, 1, 8, dataoutfile);
+    }
+    fclose(dataoutfile);    
+}
+
+int main(int argc, char *argv[]) {
+    // check if the number of arguments is 4
+    if (argc != 5) {
+        printf("Usage: %s <keyfile> <datainfile> <dataoutfile> <decrypt/encrypt>\n", argv[0]);
         return 1;
     }
-    printf("DES output: 0x%08X%08X\n", buffer[9], buffer[10]);
+
+    FILE *keyfile;
+    FILE *datainfile;
+    uint8_t decrypt;
+    struct key key;
+    
+    // check if the last argument is 0 or 1 and assign to encrypt
+    if (strcmp(argv[4], "0") != 0 && strcmp(argv[4], "1") != 0) {
+        // print error to stderr and exit
+        fprintf(stderr, "Error: the last argument must be 0 or 1\n");
+        return 1;
+    }
+    else {
+        decrypt = atoi(argv[4]);
+    }
+
+    // check if keyfile can be opened
+    if ((keyfile = fopen(argv[1], "r")) == NULL) {
+        // print error to stderr and exit
+        fprintf(stderr, "Error: cannot open keyfile\n");
+        return 1;
+    }
+
+    // check if datainfile can be opened
+    if ((datainfile = fopen(argv[2], "r")) == NULL) {
+        // print error to stderr and exit
+        fprintf(stderr, "Error: cannot open datainfile\n");
+        return 1;
+    }
+
+    key = get_key(keyfile);
+    fclose(keyfile);
+
+    // check validitiy of key
+    // if invalid, print error to stderr and exit
+    if (!validkey(key)) {
+        fprintf(stderr, "Error: key is invalid\n");
+        return 1;
+    }
+
+    if (decrypt) {
+        decryptdes3(datainfile, key, argv[3]);
+    }
+    else {
+        encryptdes3(datainfile, key, argv[3]);
+    }
+    fclose(datainfile);
+    
 
     return 0;
-}
-
-// Function to split a 192-bit hexadecimal key into six 32-bit chunks
-void split_key(const char *hex_key, int *var1, int *var2, int *var3, int *var4, int *var5, int *var6) {
-    char padded_key[49];
-    int i, j;
-    memset(padded_key, 0, sizeof(padded_key));
-    // Ensure the input string is of the correct length
-    size_t input_length = strlen(hex_key);
-    if (input_length > 48) {
-        fprintf(stderr, "Error: The hexadecimal key should be at most 192 bits long.\n");
-        exit(1);
-    }
-
-    for (i = 47, j = input_length-1; j >= 0; i--, j--) {
-        padded_key[i] = hex_key[j];
-    }
-
-    // Convert each 32-bit chunk from hexadecimal string to integer
-    if (sscanf(padded_key, "%8x%8x%8x%8x%8x%8x", var1, var2, var3, var4, var5, var6) != 6) {
-        fprintf(stderr, "Error: Failed to parse the hexadecimal key.\n");
-        exit(1);
-    }
-}
-
-// Function to split a 64-bit hexadecimal input into two 32-bit chunks
-void split_input(const char *hex_input, int *var1, int *var2) {
-    char padded_input[17];
-    int i, j;
-    memset(padded_input, 0, sizeof(padded_input));
-    // Ensure the input string is of the correct length
-    size_t input_length = strlen(hex_input);
-    if (input_length > 16) {
-        fprintf(stderr, "Error: The hexadecimal input should be at most 64 bits long.\n");
-        exit(1);
-    }
-
-    for (i = 15, j = input_length-1; j >= 0; i--, j--) {
-        padded_input[i] = hex_input[j];
-    }
-
-    // Convert each 32-bit chunk from hexadecimal string to integer
-    if (sscanf(padded_input, "%8x%8x", var1, var2) != 2) {
-        fprintf(stderr, "Error: Failed to parse the hexadecimal input.\n");
-        exit(1);
-    }
 }
