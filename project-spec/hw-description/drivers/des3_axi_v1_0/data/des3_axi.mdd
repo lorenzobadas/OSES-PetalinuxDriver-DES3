@@ -1,0 +1,10 @@
+
+
+OPTION psf_version = 2.1;
+
+BEGIN DRIVER des3_axi
+	OPTION supported_peripherals = (des3_axi);
+	OPTION copyfiles = all;
+	OPTION VERSION = 1.0;
+	OPTION NAME = des3_axi;
+END DRIVER
