@@ -171,11 +171,15 @@ void decryptdes3(FILE *datainfile, struct key key, char *dataoutfilename) {
                 found_different = 1;
             }
         }
-        if (!found_different) {
+        if (!found_different && ref != 8) {
             fwrite(buffer, 1, 8-ref, dataoutfile);
             fclose(dataoutfile);
             return;
-        }        
+        }
+        else if (!found_different && ref == 8) {
+            fclose(dataoutfile);
+            return;
+        }
     }
     // error format in last block
     // print error to stderr and exit
@@ -216,34 +220,15 @@ void encryptdes3(FILE *datainfile, struct key key, char *dataoutfilename) {
         // write buffer to dataoutfile
         fwrite(buffer, 1, 8, dataoutfile);
     }
-    if (padding != 8) {
-        fread(buffer, 1, mod_length, datainfile);
-        for (i = 0; i < padding; i++) {
-            buffer[mod_length+i] = padding;
-        }
-        // call driver to encrypt buffer
-        write_to_driver(buffer, key, DES3_ENCRYPT);
-        read_from_driver(buffer);
-        // write buffer to dataoutfile
-        fwrite(buffer, 1, 8, dataoutfile);
+    fread(buffer, 1, mod_length, datainfile);
+    for (i = 0; i < padding; i++) {
+        buffer[mod_length+i] = padding;
     }
-    else {
-        fread(buffer, 1, 8, datainfile);
-        // call driver to encrypt buffer
-        write_to_driver(buffer, key, DES3_ENCRYPT);
-        read_from_driver(buffer);
-        // write buffer to dataoutfile
-        fwrite(buffer, 1, 8, dataoutfile);
-
-        for(i = 0; i < padding; i++) {
-            buffer[i] = padding;
-        }
-        // call driver to encrypt buffer
-        write_to_driver(buffer, key, DES3_ENCRYPT);
-        read_from_driver(buffer);
-        // write buffer to dataoutfile
-        fwrite(buffer, 1, 8, dataoutfile);
-    }
+    // call driver to encrypt buffer
+    write_to_driver(buffer, key, DES3_ENCRYPT);
+    read_from_driver(buffer);
+    // write buffer to dataoutfile
+    fwrite(buffer, 1, 8, dataoutfile);
     fclose(dataoutfile);    
 }
 
